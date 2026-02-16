@@ -82,7 +82,7 @@ const opportunities = [
   { title: 'Revenue Assurance Attachment', company: 'Kenya Power', type: 'attachment', description: 'Revenue assurance and loss reduction initiatives.', requirements: ['Engineering or Finance student', 'Recommendation letter'], location: 'Nairobi', duration: '3 months', category: 'Finance', applicationFee: 350, deadline: baseDate() },
   { title: 'Agile Coach Intern', company: 'KCB Group', type: 'internship', description: 'Support agile adoption and team coaching. Ceremonies and metrics.', requirements: ['CS or Business', 'Interest in agile'], location: 'Nairobi', duration: '6 months', category: 'Technology', applicationFee: 350, deadline: baseDate() },
   { title: 'Customer Success Intern', company: 'Equity Bank', type: 'internship', description: 'Support enterprise and SME customer success and onboarding.', requirements: ['Business or related', 'Customer focus'], location: 'Nairobi', duration: '3-6 months', category: 'Business', applicationFee: 350, deadline: baseDate() },
-  { title: 'Data Engineering Intern', company: 'Safaricom', type: 'internship', description: 'Data pipelines, ETL, and data warehouse support.', requirements: ['CS or related', 'SQL and scripting'], location: 'Nairobi', duration: '6 months', category: 'Technology', applicationFee: 350, deadline: baseDate() },
+  { title: 'Data Engineering Intern', company::: 'Safaricom', type: 'internship', description: 'Data pipelines, ETL, and data warehouse support.', requirements: ['CS or related', 'SQL and scripting'], location: 'Nairobi', duration: '6 months', category: 'Technology', applicationFee: 350, deadline: baseDate() },
 ];
 
 async function seed() {
