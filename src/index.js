@@ -15,10 +15,10 @@ connectDB();
 app.use(cors({ origin: process.env.FRONTEND_URL || 'http://localhost:5173', credentials: true }));
 app.use(express.json());
 
-// Health check (for Railway)
-app.get('/api/health', (req, res) => {
-  res.json({ status: 'ok', timestamp: new Date().toISOString() });
-});
+// Health check (for Railway) - temporarily disabled
+// app.get('/api/health', (req, res) => {
+//   res.json({ status: 'ok', timestamp: new Date().toISOString() });
+// });
 
 app.use('/api/auth', authRoutes);
 app.use('/api/opportunities', opportunityRoutes);
