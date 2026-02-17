@@ -20,16 +20,18 @@ router.post(
     body('name').trim().notEmpty().withMessage('Name is required'),
     body('email').isEmail().normalizeEmail(),
     body('password').isLength({ min: 6 }).withMessage('Password must be at least 6 characters'),
+    body('role').optional().isIn(['student', 'graduate']).withMessage('Role must be student or graduate'),
   ],
   async (req, res) => {
     try {
       const errors = validationResult(req);
       if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
-      const { name, email, password } = req.body;
+      const { name, email, password, role: bodyRole } = req.body;
       const existing = await User.findOne({ email });
       if (existing) return res.status(400).json({ message: 'Email already registered' });
       const isAdmin = process.env.ADMIN_EMAIL && email.toLowerCase() === process.env.ADMIN_EMAIL.toLowerCase();
-      const user = await User.create({ name, email, password, authProvider: 'email', role: isAdmin ? 'admin' : 'student' });
+      const role = isAdmin ? 'admin' : (bodyRole === 'graduate' ? 'graduate' : 'student');
+      const user = await User.create({ name, email, password, authProvider: 'email', role });
       const u = { _id: user._id, name: user.name, email: user.email, role: user.role, avatar: user.avatar };
       res.status(201).json({ user: u, token: generateToken(user._id) });
     } catch (err) {
@@ -66,6 +68,7 @@ router.post('/google', async (req, res) => {
   try {
     const idToken = req.body.idToken;
     const accessToken = req.body.accessToken;
+    const bodyRole = req.body.role; // 'student' | 'graduate' — used only when creating a new user
     let payload;
     if (idToken) {
       const ticket = await googleClient.verifyIdToken({
@@ -86,12 +89,15 @@ router.post('/google', async (req, res) => {
     const { sub: googleId, name, email, picture } = payload;
     let user = await User.findOne({ $or: [{ googleId }, { email }] });
     if (!user) {
+      const isAdmin = process.env.ADMIN_EMAIL && email.toLowerCase() === process.env.ADMIN_EMAIL.toLowerCase();
+      const role = isAdmin ? 'admin' : (bodyRole === 'graduate' ? 'graduate' : 'student');
       user = await User.create({
         name,
         email,
         googleId,
         avatar: picture,
         authProvider: 'google',
+        role,
       });
     } else if (!user.googleId) {
       user.googleId = googleId;
