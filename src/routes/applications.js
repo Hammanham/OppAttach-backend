@@ -3,7 +3,7 @@ import multer from 'multer';
 import Application from '../models/Application.js';
 import Opportunity from '../models/Opportunity.js';
 import User from '../models/User.js';
-import { protect } from '../middleware/auth.js';
+import { protect, adminOnly } from '../middleware/auth.js';
 import { uploadToCloudinary } from '../utils/cloudinary.js';
 import { initiateSTKPush } from '../utils/mpesa.js';
 
@@ -18,6 +18,27 @@ router.get('/', protect, async (req, res) => {
       .sort({ createdAt: -1 })
       .lean();
     res.json(apps);
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
+// Admin: list all applications
+router.get('/admin/all', protect, adminOnly, async (req, res) => {
+  try {
+    const { page = 1, limit = 50 } = req.query;
+    const skip = (Number(page) - 1) * Number(limit);
+    const [applications, total] = await Promise.all([
+      Application.find({})
+        .populate('opportunityId', 'title company type')
+        .populate('userId', 'name email')
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(Number(limit))
+        .lean(),
+      Application.countDocuments({}),
+    ]);
+    res.json({ applications, total, page: Number(page), pages: Math.ceil(total / Number(limit)) });
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
