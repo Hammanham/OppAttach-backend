@@ -1,5 +1,6 @@
 import express from 'express';
 import Opportunity from '../models/Opportunity.js';
+import User from '../models/User.js';
 import { protect, adminOnly } from '../middleware/auth.js';
 import { body, validationResult } from 'express-validator';
 
@@ -41,6 +42,31 @@ router.get('/', async (req, res) => {
       Opportunity.countDocuments(filter),
     ]);
     res.json({ opportunities, total, page: Number(page), pages: Math.ceil(total / Number(limit)) });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
+// Toggle save opportunity for current user (must be before GET /:id)
+router.post('/:id/save', protect, async (req, res) => {
+  try {
+    const opp = await Opportunity.findById(req.params.id);
+    if (!opp) return res.status(404).json({ message: 'Opportunity not found' });
+    const user = await User.findById(req.user._id).select('savedOpportunities');
+    if (!user) return res.status(401).json({ message: 'User not found' });
+    const id = opp._id;
+    const list = user.savedOpportunities || [];
+    const idx = list.findIndex((s) => s.toString() === id.toString());
+    if (idx >= 0) {
+      list.splice(idx, 1);
+      user.savedOpportunities = list;
+      await user.save();
+      return res.json({ saved: false });
+    }
+    list.push(id);
+    user.savedOpportunities = list;
+    await user.save();
+    res.json({ saved: true });
   } catch (err) {
     res.status(500).json({ message: err.message });
   }

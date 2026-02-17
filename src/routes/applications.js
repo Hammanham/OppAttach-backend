@@ -2,6 +2,7 @@ import express from 'express';
 import multer from 'multer';
 import Application from '../models/Application.js';
 import Opportunity from '../models/Opportunity.js';
+import User from '../models/User.js';
 import { protect } from '../middleware/auth.js';
 import { uploadToCloudinary } from '../utils/cloudinary.js';
 import { initiateSTKPush } from '../utils/mpesa.js';
@@ -13,10 +14,23 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 *
 router.get('/my', protect, async (req, res) => {
   try {
     const apps = await Application.find({ userId: req.user._id })
-      .populate('opportunityId', 'title company type')
+      .populate('opportunityId', 'title company type deadline')
       .sort({ createdAt: -1 })
       .lean();
     res.json(apps);
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
+// List my saved opportunities (returns array of opportunity documents)
+router.get('/saved', protect, async (req, res) => {
+  try {
+    const user = await User.findById(req.user._id).select('savedOpportunities').lean();
+    const ids = user?.savedOpportunities || [];
+    if (ids.length === 0) return res.json([]);
+    const opportunities = await Opportunity.find({ _id: { $in: ids }, isActive: true }).lean();
+    res.json(opportunities);
   } catch (err) {
     res.status(500).json({ message: err.message });
   }

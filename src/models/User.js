@@ -10,6 +10,7 @@ const userSchema = new mongoose.Schema(
     googleId: { type: String, sparse: true },
     avatar: { type: String },
     role: { type: String, enum: ['student', 'admin'], default: 'student' },
+    savedOpportunities: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Opportunity' }],
   },
   { timestamps: true }
 );
