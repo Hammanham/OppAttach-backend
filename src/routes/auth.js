@@ -30,14 +30,8 @@ router.post(
       if (existing) return res.status(400).json({ message: 'Email already registered' });
       const isAdmin = process.env.ADMIN_EMAIL && email.toLowerCase() === process.env.ADMIN_EMAIL.toLowerCase();
       const user = await User.create({ name, email, password, authProvider: 'email', role: isAdmin ? 'admin' : 'student' });
-      res.status(201).json({
-        _id: user._id,
-        name: user.name,
-        email: user.email,
-        role: user.role,
-        avatar: user.avatar,
-        token: generateToken(user._id),
-      });
+      const u = { _id: user._id, name: user.name, email: user.email, role: user.role, avatar: user.avatar };
+      res.status(201).json({ user: u, token: generateToken(user._id) });
     } catch (err) {
       res.status(500).json({ message: err.message });
     }
@@ -56,14 +50,8 @@ router.post(
       if (!user || !user.password) return res.status(401).json({ message: 'Invalid credentials' });
       const match = await user.matchPassword(password);
       if (!match) return res.status(401).json({ message: 'Invalid credentials' });
-      res.json({
-        _id: user._id,
-        name: user.name,
-        email: user.email,
-        role: user.role,
-        avatar: user.avatar,
-        token: generateToken(user._id),
-      });
+      const u = { _id: user._id, name: user.name, email: user.email, role: user.role, avatar: user.avatar };
+      res.json({ user: u, token: generateToken(user._id) });
     } catch (err) {
       res.status(500).json({ message: err.message });
     }
@@ -106,14 +94,8 @@ router.post('/google', async (req, res) => {
       user.avatar = user.avatar || picture;
       await user.save();
     }
-    res.json({
-      _id: user._id,
-      name: user.name,
-      email: user.email,
-      role: user.role,
-      avatar: user.avatar,
-      token: generateToken(user._id),
-    });
+    const u = { _id: user._id, name: user.name, email: user.email, role: user.role, avatar: user.avatar };
+    res.json({ user: u, token: generateToken(user._id) });
   } catch (err) {
     res.status(401).json({ message: 'Invalid Google token' });
   }
@@ -121,6 +103,18 @@ router.post('/google', async (req, res) => {
 
 router.get('/me', protect, async (req, res) => {
   res.json(req.user);
+});
+
+// Frontend compatibility: logout (stateless JWT — client clears token)
+router.post('/logout', (req, res) => {
+  res.json({ ok: true });
+});
+
+// Frontend compatibility: refresh — return current user and new token
+router.post('/refresh', protect, async (req, res) => {
+  const user = req.user;
+  const u = { _id: user._id, name: user.name, email: user.email, role: user.role, avatar: user.avatar };
+  res.json({ user: u, token: generateToken(user._id) });
 });
 
 export default router;

@@ -10,7 +10,19 @@ import { initiateSTKPush } from '../utils/mpesa.js';
 const router = express.Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
 
-// List my applications
+// List my applications (frontend calls GET /applications)
+router.get('/', protect, async (req, res) => {
+  try {
+    const apps = await Application.find({ userId: req.user._id })
+      .populate('opportunityId', 'title company type deadline')
+      .sort({ createdAt: -1 })
+      .lean();
+    res.json(apps);
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
 router.get('/my', protect, async (req, res) => {
   try {
     const apps = await Application.find({ userId: req.user._id })
@@ -160,6 +172,64 @@ router.post('/:id/pay', protect, async (req, res) => {
       checkoutRequestId: stk.CheckoutRequestID,
       message: 'Enter your M-Pesa PIN on your phone to complete payment.',
     });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
+// Frontend: get one application (own only)
+router.get('/:id', protect, async (req, res) => {
+  try {
+    const app = await Application.findOne({
+      _id: req.params.id,
+      userId: req.user._id,
+    })
+      .populate('opportunityId', 'title company type deadline')
+      .lean();
+    if (!app) return res.status(404).json({ message: 'Application not found' });
+    res.json(app);
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
+// Frontend: update application (e.g. cover letter; only when pending)
+router.patch('/:id', protect, async (req, res) => {
+  try {
+    const application = await Application.findOne({
+      _id: req.params.id,
+      userId: req.user._id,
+    });
+    if (!application) return res.status(404).json({ message: 'Application not found' });
+    if (application.status !== 'pending_payment' && application.status !== 'submitted') {
+      return res.status(400).json({ message: 'Application can no longer be updated' });
+    }
+    const { coverLetter } = req.body;
+    if (coverLetter !== undefined) application.coverLetter = coverLetter;
+    await application.save();
+    const updated = await Application.findById(application._id)
+      .populate('opportunityId', 'title company type deadline')
+      .lean();
+    res.json(updated);
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
+// Frontend: withdraw application (only when pending_payment or submitted)
+router.delete('/:id', protect, async (req, res) => {
+  try {
+    const application = await Application.findOne({
+      _id: req.params.id,
+      userId: req.user._id,
+    });
+    if (!application) return res.status(404).json({ message: 'Application not found' });
+    const allowed = ['pending_payment', 'submitted'];
+    if (!allowed.includes(application.status)) {
+      return res.status(400).json({ message: 'Application cannot be withdrawn' });
+    }
+    await Application.findByIdAndDelete(application._id);
+    res.json({ message: 'Application withdrawn' });
   } catch (err) {
     res.status(500).json({ message: err.message });
   }

@@ -9,6 +9,7 @@ const userSchema = new mongoose.Schema(
     authProvider: { type: String, enum: ['email', 'google'], default: 'email' },
     googleId: { type: String, sparse: true },
     avatar: { type: String },
+    cvUrl: { type: String },
     role: { type: String, enum: ['student', 'admin'], default: 'student' },
     savedOpportunities: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Opportunity' }],
   },

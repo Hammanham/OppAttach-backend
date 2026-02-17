@@ -47,6 +47,32 @@ router.get('/', async (req, res) => {
   }
 });
 
+// Frontend: recommended opportunities (e.g. latest 6)
+router.get('/recommended', async (req, res) => {
+  try {
+    const opportunities = await Opportunity.find({ isActive: true })
+      .sort({ createdAt: -1 })
+      .limit(6)
+      .lean();
+    res.json(opportunities);
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
+// Frontend: list current user's saved opportunities
+router.get('/saved', protect, async (req, res) => {
+  try {
+    const user = await User.findById(req.user._id).select('savedOpportunities').lean();
+    const ids = user?.savedOpportunities || [];
+    if (ids.length === 0) return res.json([]);
+    const opportunities = await Opportunity.find({ _id: { $in: ids }, isActive: true }).lean();
+    res.json(opportunities);
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
 // Toggle save opportunity for current user (must be before GET /:id)
 router.post('/:id/save', protect, async (req, res) => {
   try {
@@ -67,6 +93,27 @@ router.post('/:id/save', protect, async (req, res) => {
     user.savedOpportunities = list;
     await user.save();
     res.json({ saved: true });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
+// Frontend: unsave opportunity (DELETE instead of toggle)
+router.delete('/:id/save', protect, async (req, res) => {
+  try {
+    const opp = await Opportunity.findById(req.params.id);
+    if (!opp) return res.status(404).json({ message: 'Opportunity not found' });
+    const user = await User.findById(req.user._id).select('savedOpportunities');
+    if (!user) return res.status(401).json({ message: 'User not found' });
+    const id = opp._id;
+    const list = user.savedOpportunities || [];
+    const idx = list.findIndex((s) => s.toString() === id.toString());
+    if (idx >= 0) {
+      list.splice(idx, 1);
+      user.savedOpportunities = list;
+      await user.save();
+    }
+    res.json({ saved: false });
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
