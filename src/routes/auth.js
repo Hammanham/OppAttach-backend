@@ -59,6 +59,10 @@ router.post(
 );
 
 router.post('/google', async (req, res) => {
+  const clientId = process.env.GOOGLE_CLIENT_ID;
+  if (!clientId) {
+    return res.status(500).json({ message: 'Google sign-in is not configured (missing GOOGLE_CLIENT_ID)' });
+  }
   try {
     const idToken = req.body.idToken;
     const accessToken = req.body.accessToken;
@@ -66,7 +70,7 @@ router.post('/google', async (req, res) => {
     if (idToken) {
       const ticket = await googleClient.verifyIdToken({
         idToken,
-        audience: process.env.GOOGLE_CLIENT_ID,
+        audience: clientId,
       });
       payload = ticket.getPayload();
     } else if (accessToken) {
@@ -97,7 +101,14 @@ router.post('/google', async (req, res) => {
     const u = { _id: user._id, name: user.name, email: user.email, role: user.role, avatar: user.avatar };
     res.json({ user: u, token: generateToken(user._id) });
   } catch (err) {
-    res.status(401).json({ message: 'Invalid Google token' });
+    console.error('Google sign-in error:', err.message);
+    const message =
+      err.message?.includes('audience') || err.message?.includes('Audience')
+        ? 'Google client ID mismatch. Use the same OAuth client ID in frontend (VITE_GOOGLE_CLIENT_ID) and backend (GOOGLE_CLIENT_ID), and add your site URL to Authorized JavaScript origins in Google Cloud Console.'
+        : err.message?.includes('expired')
+          ? 'Google sign-in expired. Try again.'
+          : 'Invalid Google token. Check that your site is in Authorized JavaScript origins in Google Cloud Console.';
+    res.status(401).json({ message });
   }
 });
 
