@@ -11,6 +11,7 @@ const userSchema = new mongoose.Schema(
     avatar: { type: String },
     cvUrl: { type: String },
     role: { type: String, enum: ['student', 'graduate', 'admin'], default: 'student' },
+    emailVerified: { type: Boolean, default: false },
     savedOpportunities: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Opportunity' }],
   },
   { timestamps: true }

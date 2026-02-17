@@ -32,7 +32,7 @@ router.post(
       const isAdmin = process.env.ADMIN_EMAIL && email.toLowerCase() === process.env.ADMIN_EMAIL.toLowerCase();
       const role = isAdmin ? 'admin' : (bodyRole === 'graduate' ? 'graduate' : 'student');
       const user = await User.create({ name, email, password, authProvider: 'email', role });
-      const u = { _id: user._id, name: user.name, email: user.email, role: user.role, avatar: user.avatar };
+      const u = { _id: user._id, name: user.name, email: user.email, role: user.role, avatar: user.avatar, emailVerified: user.emailVerified };
       res.status(201).json({ user: u, token: generateToken(user._id) });
     } catch (err) {
       res.status(500).json({ message: err.message });
@@ -52,7 +52,7 @@ router.post(
       if (!user || !user.password) return res.status(401).json({ message: 'Invalid credentials' });
       const match = await user.matchPassword(password);
       if (!match) return res.status(401).json({ message: 'Invalid credentials' });
-      const u = { _id: user._id, name: user.name, email: user.email, role: user.role, avatar: user.avatar };
+      const u = { _id: user._id, name: user.name, email: user.email, role: user.role, avatar: user.avatar, emailVerified: user.emailVerified };
       res.json({ user: u, token: generateToken(user._id) });
     } catch (err) {
       res.status(500).json({ message: err.message });
@@ -98,13 +98,17 @@ router.post('/google', async (req, res) => {
         avatar: picture,
         authProvider: 'google',
         role,
+        emailVerified: true,
       });
-    } else if (!user.googleId) {
-      user.googleId = googleId;
-      user.avatar = user.avatar || picture;
+    } else {
+      if (!user.googleId) {
+        user.googleId = googleId;
+        user.avatar = user.avatar || picture;
+      }
+      user.emailVerified = true;
       await user.save();
     }
-    const u = { _id: user._id, name: user.name, email: user.email, role: user.role, avatar: user.avatar };
+    const u = { _id: user._id, name: user.name, email: user.email, role: user.role, avatar: user.avatar, emailVerified: user.emailVerified };
     res.json({ user: u, token: generateToken(user._id) });
   } catch (err) {
     console.error('Google sign-in error:', err.message);
