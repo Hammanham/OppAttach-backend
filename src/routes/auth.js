@@ -1,9 +1,11 @@
 import express from 'express';
 import jwt from 'jsonwebtoken';
+import crypto from 'crypto';
 import { body, validationResult } from 'express-validator';
 import { OAuth2Client } from 'google-auth-library';
 import User from '../models/User.js';
 import { protect } from '../middleware/auth.js';
+import { sendVerificationEmail } from '../utils/sendEmail.js';
 
 const router = express.Router();
 const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
@@ -32,8 +34,20 @@ router.post(
       const isAdmin = process.env.ADMIN_EMAIL && email.toLowerCase() === process.env.ADMIN_EMAIL.toLowerCase();
       const role = isAdmin ? 'admin' : (bodyRole === 'graduate' ? 'graduate' : 'student');
       const user = await User.create({ name, email, password, authProvider: 'email', role });
+      const verificationToken = crypto.randomBytes(32).toString('hex');
+      user.emailVerificationToken = verificationToken;
+      user.emailVerificationExpires = new Date(Date.now() + 24 * 60 * 60 * 1000);
+      await user.save();
+      const baseUrl = process.env.BACKEND_URL || `${req.protocol}://${req.get('host')}`;
+      const verificationUrl = `${baseUrl.replace(/\/$/, '')}/api/auth/verify-email?token=${verificationToken}`;
+      const emailSent = await sendVerificationEmail(user.email, user.name, verificationUrl);
       const u = { _id: user._id, name: user.name, email: user.email, role: user.role, avatar: user.avatar, emailVerified: user.emailVerified };
-      res.status(201).json({ user: u, token: generateToken(user._id) });
+      res.status(201).json({
+        user: u,
+        token: generateToken(user._id),
+        verificationEmailSent: emailSent,
+        message: emailSent ? 'Account created. Please check your email to verify your address.' : 'Account created. Verification email could not be sent (SMTP not configured).',
+      });
     } catch (err) {
       res.status(500).json({ message: err.message });
     }
@@ -122,6 +136,34 @@ router.post('/google', async (req, res) => {
   }
 });
 
+// GET /verify-email?token=xxx — verify email from link in email, then redirect to frontend
+router.get('/verify-email', async (req, res) => {
+  try {
+    const { token } = req.query;
+    if (!token) {
+      const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+      return res.redirect(`${frontendUrl}?verified=error&reason=missing`);
+    }
+    const user = await User.findOne({
+      emailVerificationToken: token,
+      emailVerificationExpires: { $gt: new Date() },
+    });
+    if (!user) {
+      const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+      return res.redirect(`${frontendUrl}?verified=error&reason=invalid_or_expired`);
+    }
+    user.emailVerified = true;
+    user.emailVerificationToken = undefined;
+    user.emailVerificationExpires = undefined;
+    await user.save();
+    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+    res.redirect(`${frontendUrl.replace(/\/$/, '')}?verified=1`);
+  } catch (err) {
+    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+    res.redirect(`${frontendUrl}?verified=error`);
+  }
+});
+
 router.get('/me', protect, async (req, res) => {
   res.json(req.user);
 });
@@ -134,7 +176,7 @@ router.post('/logout', (req, res) => {
 // Frontend compatibility: refresh — return current user and new token
 router.post('/refresh', protect, async (req, res) => {
   const user = req.user;
-  const u = { _id: user._id, name: user.name, email: user.email, role: user.role, avatar: user.avatar };
+  const u = { _id: user._id, name: user.name, email: user.email, role: user.role, avatar: user.avatar, emailVerified: user.emailVerified };
   res.json({ user: u, token: generateToken(user._id) });
 });
 

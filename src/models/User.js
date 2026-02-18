@@ -12,6 +12,8 @@ const userSchema = new mongoose.Schema(
     cvUrl: { type: String },
     role: { type: String, enum: ['student', 'graduate', 'admin'], default: 'student' },
     emailVerified: { type: Boolean, default: false },
+    emailVerificationToken: { type: String },
+    emailVerificationExpires: { type: Date },
     savedOpportunities: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Opportunity' }],
   },
   { timestamps: true }
