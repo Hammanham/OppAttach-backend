@@ -12,8 +12,9 @@ const applicationSchema = new mongoose.Schema(
       enum: ['pending_payment', 'submitted', 'under_review', 'shortlisted', 'rejected', 'accepted'],
       default: 'pending_payment',
     },
-    mpesaCheckoutRequestId: { type: String },
-    mpesaTransactionId: { type: String },
+    mpesaCheckoutRequestId: { type: String }, // legacy
+    mpesaTransactionId: { type: String }, // legacy
+    paymentTransactionId: { type: String }, // Flutterwave transaction id
     amountPaid: { type: Number },
   },
   { timestamps: true }

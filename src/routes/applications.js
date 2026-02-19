@@ -5,7 +5,7 @@ import Opportunity from '../models/Opportunity.js';
 import User from '../models/User.js';
 import { protect, adminOnly } from '../middleware/auth.js';
 import { uploadToCloudinary } from '../utils/cloudinary.js';
-import { initiateSTKPush } from '../utils/mpesa.js';
+import { initializePayment } from '../utils/flutterwave.js';
 
 const router = express.Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
@@ -69,7 +69,25 @@ router.get('/saved', protect, async (req, res) => {
   }
 });
 
-// Create application: upload resume (and recommendation letter for attachment), then trigger STK push
+// Helper: build Flutterwave redirect URL and init payment for an application
+async function getPaymentLink(application, opportunity, user) {
+  const baseUrl = process.env.FLW_REDIRECT_URL || `${(process.env.FRONTEND_URL || '').replace(/\/$/, '')}/app/applications`;
+  const redirectUrl = `${baseUrl}?payment=done&tx_ref=APP-${application._id}`;
+  const { paymentLink } = await initializePayment({
+    txRef: `APP-${application._id}`,
+    amount: opportunity?.applicationFee || 500,
+    currency: 'KES',
+    redirectUrl,
+    customer: { email: user.email, name: user.name || 'Applicant' },
+    customizations: {
+      title: 'IAS Application Fee',
+      description: `Application fee: ${opportunity?.title || 'Opportunity'}`,
+    },
+  });
+  return paymentLink;
+}
+
+// Create application: upload resume (and recommendation letter for attachment), then return Flutterwave payment link
 router.post(
   '/',
   protect,
@@ -79,7 +97,7 @@ router.post(
   ]),
   async (req, res) => {
     try {
-      const { opportunityId, coverLetter, phoneNumber } = req.body;
+      const { opportunityId, coverLetter } = req.body;
       const opportunity = await Opportunity.findById(opportunityId);
       if (!opportunity) return res.status(404).json({ message: 'Opportunity not found' });
       if (!opportunity.isActive) return res.status(400).json({ message: 'Opportunity is closed' });
@@ -113,30 +131,13 @@ router.post(
         status: 'pending_payment',
       });
 
-      const amount = opportunity.applicationFee || 500;
-      if (!phoneNumber) {
-        return res.status(200).json({
-          application: application,
-          requiresPayment: true,
-          amount,
-          message: 'Application saved. Provide phone number to complete payment via M-Pesa.',
-        });
-      }
-
-      const ref = `APP-${application._id}`;
-      const stk = await initiateSTKPush(
-        phoneNumber,
-        amount,
-        ref,
-        `Application fee: ${opportunity.title}`
-      );
-      application.mpesaCheckoutRequestId = stk.CheckoutRequestID;
-      await application.save();
-
-      res.json({
+      const paymentLink = await getPaymentLink(application, opportunity, req.user);
+      res.status(200).json({
         application,
-        checkoutRequestId: stk.CheckoutRequestID,
-        message: 'Enter your M-Pesa PIN on your phone to complete payment.',
+        paymentLink,
+        requiresPayment: true,
+        amount: opportunity.applicationFee || 500,
+        message: 'Application saved. Complete payment via the link to finish.',
       });
     } catch (err) {
       res.status(500).json({ message: err.message });
@@ -144,54 +145,41 @@ router.post(
   }
 );
 
-// M-Pesa callback (Daraja sends result here)
-router.post('/mpesa-callback', express.json(), async (req, res) => {
-  res.status(200).json({ ResultCode: 0, ResultDesc: 'Accepted' });
+// Flutterwave webhook (payment completed) — set URL in Flutterwave dashboard
+router.post('/flutterwave-webhook', async (req, res) => {
+  res.status(200).send();
   const body = req.body;
-  const result = body?.Body?.stkCallback;
-  if (!result) return;
-  const checkoutRequestId = result.CheckoutRequestID;
-  const success = result.ResultCode === 0;
-  const callbackMetadata = result.CallbackMetadata?.Item || [];
-  const getItem = (key) => callbackMetadata.find((i) => i.Name === key)?.Value;
-  const mpesaTransactionId = getItem('MpesaReceiptNumber');
-  const amount = getItem('Amount');
-
-  const application = await Application.findOne({ mpesaCheckoutRequestId: checkoutRequestId });
-  if (!application) return;
-  application.status = success ? 'submitted' : 'pending_payment';
-  if (success) {
-    application.mpesaTransactionId = mpesaTransactionId;
-    application.amountPaid = amount;
-  }
-  application.mpesaCheckoutRequestId = undefined;
+  const event = body?.event;
+  const data = body?.data;
+  if (event !== 'charge.completed' || !data) return;
+  const status = data?.status;
+  if (status !== 'successful') return;
+  const txRef = data?.tx_ref;
+  const txId = data?.id;
+  const amount = data?.amount;
+  if (!txRef || !txRef.startsWith('APP-')) return;
+  const applicationId = txRef.replace(/^APP-/, '');
+  const application = await Application.findById(applicationId);
+  if (!application || application.status !== 'pending_payment') return;
+  application.status = 'submitted';
+  application.paymentTransactionId = String(txId);
+  if (amount != null) application.amountPaid = amount;
   await application.save();
 });
 
-// Pay for existing pending_payment application (STK push only)
+// Pay for existing pending_payment application (get new Flutterwave payment link)
 router.post('/:id/pay', protect, async (req, res) => {
   try {
-    const { phoneNumber } = req.body;
-    if (!phoneNumber) return res.status(400).json({ message: 'Phone number is required' });
     const application = await Application.findOne({
       _id: req.params.id,
       userId: req.user._id,
       status: 'pending_payment',
     }).populate('opportunityId');
     if (!application) return res.status(404).json({ message: 'Application not found' });
-    const amount = application.opportunityId?.applicationFee || 500;
-    const ref = `APP-${application._id}`;
-    const stk = await initiateSTKPush(
-      phoneNumber,
-      amount,
-      ref,
-      `Application fee: ${application.opportunityId?.title}`
-    );
-    application.mpesaCheckoutRequestId = stk.CheckoutRequestID;
-    await application.save();
+    const paymentLink = await getPaymentLink(application, application.opportunityId, req.user);
     res.json({
-      checkoutRequestId: stk.CheckoutRequestID,
-      message: 'Enter your M-Pesa PIN on your phone to complete payment.',
+      paymentLink,
+      message: 'Complete payment via the link to finish your application.',
     });
   } catch (err) {
     res.status(500).json({ message: err.message });
