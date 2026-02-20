@@ -5,7 +5,7 @@ import Opportunity from '../models/Opportunity.js';
 import User from '../models/User.js';
 import { protect, adminOnly } from '../middleware/auth.js';
 import { uploadToCloudinary } from '../utils/cloudinary.js';
-import { initializeTransaction } from '../utils/paystack.js';
+import { initializeTransaction, chargeMpesa } from '../utils/paystack.js';
 
 const router = express.Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
@@ -220,6 +220,40 @@ router.post('/:id/pay', protect, async (req, res) => {
     });
   } catch (err) {
     res.status(500).json({ message: err.message });
+  }
+});
+
+// M-Pesa charge: user enters phone (07 or 254), we trigger STK push
+router.post('/:id/charge-mpesa', protect, async (req, res) => {
+  try {
+    const { phone } = req.body;
+    if (!phone || typeof phone !== 'string') {
+      return res.status(400).json({ message: 'Phone number is required' });
+    }
+    const application = await Application.findOne({
+      _id: req.params.id,
+      userId: req.user._id,
+      status: 'pending_payment',
+    }).populate('opportunityId');
+    if (!application) return res.status(404).json({ message: 'Application not found' });
+    const opp = application.opportunityId;
+    const reference = `APP-${application._id}-${Date.now()}`;
+    const result = await chargeMpesa({
+      reference,
+      amount: opp?.applicationFee ?? 350,
+      currency: 'KES',
+      email: req.user.email,
+      phone: phone.trim(),
+      metadata: { customer_name: req.user.name || 'Applicant' },
+    });
+    res.json({
+      reference: result.reference,
+      status: result.status,
+      display_text: result.display_text,
+      message: result.display_text,
+    });
+  } catch (err) {
+    res.status(400).json({ message: err.message || 'M-Pesa charge failed' });
   }
 });
 

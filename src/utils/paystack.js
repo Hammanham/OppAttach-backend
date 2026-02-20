@@ -44,6 +44,55 @@ export async function initializeTransaction({ reference, amount, currency, callb
 }
 
 /**
+ * Charge via M-Pesa (Kenya) - user enters phone, we trigger STK push
+ * Phone: accepts 07XXXXXXXX, 712345678, 254712345678, +254712345678
+ * Returns { reference, status, display_text }
+ */
+export async function chargeMpesa({ reference, amount, currency, email, phone, metadata = {} }) {
+  const secretKey = process.env.PAYSTACK_SECRET_KEY;
+  if (!secretKey) throw new Error('PAYSTACK_SECRET_KEY is not set');
+
+  let normalized = String(phone || '').replace(/\s/g, '').replace(/^\+/, '');
+  if (normalized.startsWith('0')) normalized = '254' + normalized.slice(1);
+  else if (!normalized.startsWith('254')) normalized = '254' + normalized;
+  if (normalized.length < 12) throw new Error('Invalid phone number');
+  // Paystack Kenya expects +254 format
+  const phoneFormatted = '+' + normalized;
+
+  const amountInSmallest = Math.round(Number(amount) * 100);
+
+  const body = {
+    email,
+    amount: String(amountInSmallest),
+    currency: currency || 'KES',
+    reference,
+    mobile_money: { phone: phoneFormatted, provider: 'mpesa' },
+    metadata: { ...metadata, custom_fields: [] },
+  };
+
+  const res = await fetch(`${PAYSTACK_BASE}/charge`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${secretKey}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(body),
+  });
+
+  const data = await res.json();
+  if (!data.status) {
+    const msg = data.message || 'M-Pesa charge failed';
+    throw new Error(msg);
+  }
+  const d = data.data || {};
+  return {
+    reference: d.reference || reference,
+    status: d.status || 'pay_offline',
+    display_text: d.display_text || 'Please complete authorization on your mobile phone',
+  };
+}
+
+/**
  * Verify Paystack webhook signature (x-paystack-signature)
  */
 export function verifyWebhookSignature(payload, signature) {
