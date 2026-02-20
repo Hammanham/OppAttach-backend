@@ -5,7 +5,7 @@ import Opportunity from '../models/Opportunity.js';
 import User from '../models/User.js';
 import { protect, adminOnly } from '../middleware/auth.js';
 import { uploadToCloudinary } from '../utils/cloudinary.js';
-import { initializePayment } from '../utils/flutterwave.js';
+import { initializeTransaction } from '../utils/paystack.js';
 
 const router = express.Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
@@ -69,25 +69,21 @@ router.get('/saved', protect, async (req, res) => {
   }
 });
 
-// Helper: build Flutterwave redirect URL and init payment for an application
+// Helper: build Paystack callback URL and init payment for an application
 async function getPaymentLink(application, opportunity, user) {
-  const baseUrl = process.env.FLW_REDIRECT_URL || `${(process.env.FRONTEND_URL || '').replace(/\/$/, '')}/app/applications`;
-  const redirectUrl = `${baseUrl}?payment=done&tx_ref=APP-${application._id}`;
-  const { paymentLink } = await initializePayment({
-    txRef: `APP-${application._id}`,
+  const baseUrl = process.env.PAYSTACK_CALLBACK_URL || `${(process.env.FRONTEND_URL || '').replace(/\/$/, '')}/app/applications`;
+  const callbackUrl = `${baseUrl}?payment=done&reference=APP-${application._id}`;
+  const { paymentLink } = await initializeTransaction({
+    reference: `APP-${application._id}`,
     amount: opportunity?.applicationFee || 500,
     currency: 'KES',
-    redirectUrl,
+    callbackUrl,
     customer: { email: user.email, name: user.name || 'Applicant' },
-    customizations: {
-      title: 'IAS Application Fee',
-      description: `Application fee: ${opportunity?.title || 'Opportunity'}`,
-    },
   });
   return paymentLink;
 }
 
-// Create application: upload resume (and recommendation letter for attachment), then return Flutterwave payment link
+// Create application: upload resume (and recommendation letter for attachment), then return Paystack payment link
 router.post(
   '/',
   protect,
@@ -145,29 +141,33 @@ router.post(
   }
 );
 
-// Flutterwave webhook (payment completed) — set URL in Flutterwave dashboard
-router.post('/flutterwave-webhook', async (req, res) => {
+// Paystack webhook handler (mounted in index.js with raw body parser)
+export async function paystackWebhookHandler(req, res) {
   res.status(200).send();
-  const body = req.body;
+  const rawBody = req.body?.toString?.() || (typeof req.body === 'string' ? req.body : '');
+  let body;
+  try {
+    body = rawBody ? JSON.parse(rawBody) : {};
+  } catch {
+    return;
+  }
   const event = body?.event;
   const data = body?.data;
-  if (event !== 'charge.completed' || !data) return;
-  const status = data?.status;
-  if (status !== 'successful') return;
-  const txRef = data?.tx_ref;
-  const txId = data?.id;
+  if (event !== 'charge.success' || !data) return;
+  const reference = data?.reference;
+  const id = data?.id;
   const amount = data?.amount;
-  if (!txRef || !txRef.startsWith('APP-')) return;
-  const applicationId = txRef.replace(/^APP-/, '');
+  if (!reference || !reference.startsWith('APP-')) return;
+  const applicationId = reference.replace(/^APP-/, '');
   const application = await Application.findById(applicationId);
   if (!application || application.status !== 'pending_payment') return;
   application.status = 'submitted';
-  application.paymentTransactionId = String(txId);
-  if (amount != null) application.amountPaid = amount;
+  application.paymentTransactionId = String(id ?? reference);
+  if (amount != null) application.amountPaid = Number(amount) / 100;
   await application.save();
-});
+}
 
-// Pay for existing pending_payment application (get new Flutterwave payment link)
+// Pay for existing pending_payment application (get new Paystack payment link)
 router.post('/:id/pay', protect, async (req, res) => {
   try {
     const application = await Application.findOne({
