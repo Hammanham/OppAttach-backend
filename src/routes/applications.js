@@ -73,9 +73,12 @@ router.get('/saved', protect, async (req, res) => {
 async function getPaymentLink(application, opportunity, user) {
   const baseUrl = process.env.PAYSTACK_CALLBACK_URL || `${(process.env.FRONTEND_URL || '').replace(/\/$/, '')}/app/applications`;
   const callbackUrl = `${baseUrl}?payment=done&reference=APP-${application._id}`;
+  const amount = process.env.TEST_APPLICATION_FEE != null
+    ? Number(process.env.TEST_APPLICATION_FEE)
+    : (opportunity?.applicationFee ?? 500);
   const { paymentLink } = await initializeTransaction({
     reference: `APP-${application._id}`,
-    amount: opportunity?.applicationFee || 500,
+    amount,
     currency: 'KES',
     callbackUrl,
     customer: { email: user.email, name: user.name || 'Applicant' },
@@ -132,7 +135,7 @@ router.post(
         application,
         paymentLink,
         requiresPayment: true,
-        amount: opportunity.applicationFee || 500,
+        amount,
         message: 'Application saved. Complete payment via the link to finish.',
       });
     } catch (err) {
