@@ -44,6 +44,29 @@ router.get('/admin/all', protect, adminOnly, async (req, res) => {
   }
 });
 
+// Admin: update application status (e.g. after reviewing documents)
+router.patch('/admin/:id/status', protect, adminOnly, async (req, res) => {
+  try {
+    const allowed = ['submitted', 'under_review', 'shortlisted', 'rejected', 'accepted'];
+    const { status } = req.body;
+    if (!status || !allowed.includes(status)) {
+      return res.status(400).json({ message: 'Invalid status. Use: submitted, under_review, shortlisted, rejected, accepted' });
+    }
+    const application = await Application.findByIdAndUpdate(
+      req.params.id,
+      { status },
+      { new: true }
+    )
+      .populate('opportunityId', 'title company type')
+      .populate('userId', 'name email')
+      .lean();
+    if (!application) return res.status(404).json({ message: 'Application not found' });
+    res.json(application);
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
 router.get('/my', protect, async (req, res) => {
   try {
     const apps = await Application.find({ userId: req.user._id })
