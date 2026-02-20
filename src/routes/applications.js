@@ -73,12 +73,9 @@ router.get('/saved', protect, async (req, res) => {
 async function getPaymentLink(application, opportunity, user) {
   const baseUrl = process.env.PAYSTACK_CALLBACK_URL || `${(process.env.FRONTEND_URL || '').replace(/\/$/, '')}/app/applications`;
   const callbackUrl = `${baseUrl}?payment=done&reference=APP-${application._id}`;
-  const amount = process.env.TEST_APPLICATION_FEE != null
-    ? Number(process.env.TEST_APPLICATION_FEE)
-    : (opportunity?.applicationFee ?? 500);
   const { paymentLink } = await initializeTransaction({
     reference: `APP-${application._id}`,
-    amount,
+    amount: opportunity?.applicationFee || 5,
     currency: 'KES',
     callbackUrl,
     customer: { email: user.email, name: user.name || 'Applicant' },
@@ -121,21 +118,30 @@ router.post(
           'internship-platform/recommendations'
         );
 
-      const application = await Application.create({
-        userId: req.user._id,
-        opportunityId,
-        resumeUrl,
-        recommendationLetterUrl,
-        coverLetter: coverLetter || undefined,
-        status: 'pending_payment',
-      });
+      let application;
+      if (existing && existing.status === 'pending_payment') {
+        existing.resumeUrl = resumeUrl;
+        existing.recommendationLetterUrl = recLetterFile ? recommendationLetterUrl : existing.recommendationLetterUrl;
+        existing.coverLetter = coverLetter || existing.coverLetter;
+        await existing.save();
+        application = existing;
+      } else {
+        application = await Application.create({
+          userId: req.user._id,
+          opportunityId,
+          resumeUrl,
+          recommendationLetterUrl,
+          coverLetter: coverLetter || undefined,
+          status: 'pending_payment',
+        });
+      }
 
       const paymentLink = await getPaymentLink(application, opportunity, req.user);
       res.status(200).json({
         application,
         paymentLink,
         requiresPayment: true,
-        amount,
+        amount: opportunity.applicationFee || 5,
         message: 'Application saved. Complete payment via the link to finish.',
       });
     } catch (err) {
