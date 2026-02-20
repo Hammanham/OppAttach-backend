@@ -74,8 +74,10 @@ async function getPaymentLink(application, opportunity, user) {
   const baseUrl = process.env.PAYSTACK_CALLBACK_URL || `${(process.env.FRONTEND_URL || '').replace(/\/$/, '')}/app/applications`;
   const callbackUrl = `${baseUrl}?payment=done&reference=APP-${application._id}`;
   const cancelUrl = `${baseUrl.split('?')[0]}?cancelled=1`;
+  // Reference must be unique per attempt (Paystack rejects duplicates on retry)
+  const reference = `APP-${application._id}-${Date.now()}`;
   const { paymentLink } = await initializeTransaction({
-    reference: `APP-${application._id}`,
+    reference,
     amount: opportunity?.applicationFee ?? 350,
     currency: 'KES',
     callbackUrl,
@@ -169,7 +171,8 @@ export async function paystackWebhookHandler(req, res) {
   const id = data?.id;
   const amount = data?.amount;
   if (!reference || !reference.startsWith('APP-')) return;
-  const applicationId = reference.replace(/^APP-/, '');
+  // Reference format: APP-{applicationId} or APP-{applicationId}-{timestamp}
+  const applicationId = reference.replace(/^APP-/, '').replace(/-\d+$/, '');
   const application = await Application.findById(applicationId);
   if (!application || application.status !== 'pending_payment') return;
   application.status = 'submitted';
