@@ -73,11 +73,13 @@ router.get('/saved', protect, async (req, res) => {
 async function getPaymentLink(application, opportunity, user) {
   const baseUrl = process.env.PAYSTACK_CALLBACK_URL || `${(process.env.FRONTEND_URL || '').replace(/\/$/, '')}/app/applications`;
   const callbackUrl = `${baseUrl}?payment=done&reference=APP-${application._id}`;
+  const cancelUrl = `${baseUrl.split('?')[0]}?cancelled=1`;
   const { paymentLink } = await initializeTransaction({
     reference: `APP-${application._id}`,
     amount: opportunity?.applicationFee ?? 350,
     currency: 'KES',
     callbackUrl,
+    cancelUrl,
     customer: { email: user.email, name: user.name || 'Applicant' },
   });
   return paymentLink;

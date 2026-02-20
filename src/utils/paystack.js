@@ -7,12 +7,15 @@ import crypto from 'crypto';
 
 const PAYSTACK_BASE = 'https://api.paystack.co';
 
-export async function initializeTransaction({ reference, amount, currency, callbackUrl, customer }) {
+export async function initializeTransaction({ reference, amount, currency, callbackUrl, cancelUrl, customer }) {
   const secretKey = process.env.PAYSTACK_SECRET_KEY;
   if (!secretKey) throw new Error('PAYSTACK_SECRET_KEY is not set');
 
   // Paystack amounts are in smallest unit (cents for KES, kobo for NGN)
   const amountInSmallest = Math.round(Number(amount) * 100);
+
+  const metadata = { customer_name: customer.name || 'Applicant' };
+  if (cancelUrl) metadata.cancel_action = cancelUrl;
 
   const body = {
     reference,
@@ -20,7 +23,7 @@ export async function initializeTransaction({ reference, amount, currency, callb
     currency: currency || 'KES',
     callback_url: callbackUrl,
     email: customer.email,
-    metadata: { customer_name: customer.name || 'Applicant' },
+    metadata,
   };
 
   const res = await fetch(`${PAYSTACK_BASE}/transaction/initialize`, {
