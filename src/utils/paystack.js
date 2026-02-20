@@ -80,11 +80,32 @@ export async function chargeMpesa({ reference, amount, currency, email, phone, m
   });
 
   const data = await res.json();
+  const d = data.data || {};
+
+  // "Charge attempted" = success - request was sent; user completes on phone
+  if (data.status && (d.status === 'pay_offline' || d.status === 'pending')) {
+    return {
+      reference: d.reference || reference,
+      status: d.status,
+      display_text: d.display_text || 'Please complete authorization on your mobile phone',
+    };
+  }
+
+  // Charge failed - use a clear error message, not "Charge attempted"
   if (!data.status) {
-    const msg = data.message || 'M-Pesa charge failed';
+    const raw = data.message || '';
+    const msg = raw === 'Charge attempted'
+      ? 'M-Pesa request could not be completed. Please try Card/Bank or check your phone number (use 2547XXXXXXXX).'
+      : raw || 'M-Pesa charge failed';
     throw new Error(msg);
   }
-  const d = data.data || {};
+
+  // Unexpected status (e.g. failed, send_otp) - surface gateway response if available
+  if (d.status === 'failed') {
+    const reason = d.gateway_response || d.message || 'Payment could not be processed';
+    throw new Error(reason);
+  }
+
   return {
     reference: d.reference || reference,
     status: d.status || 'pay_offline',
