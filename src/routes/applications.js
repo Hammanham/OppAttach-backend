@@ -75,7 +75,7 @@ async function getPaymentLink(application, opportunity, user) {
   const callbackUrl = `${baseUrl}?payment=done&reference=APP-${application._id}`;
   const { paymentLink } = await initializeTransaction({
     reference: `APP-${application._id}`,
-    amount: opportunity?.applicationFee || 5,
+    amount: opportunity?.applicationFee ?? 350,
     currency: 'KES',
     callbackUrl,
     customer: { email: user.email, name: user.name || 'Applicant' },
@@ -141,7 +141,7 @@ router.post(
         application,
         paymentLink,
         requiresPayment: true,
-        amount: opportunity.applicationFee || 5,
+        amount: opportunity.applicationFee ?? 350,
         message: 'Application saved. Complete payment via the link to finish.',
       });
     } catch (err) {
