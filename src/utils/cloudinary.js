@@ -6,10 +6,10 @@ cloudinary.config({
   api_secret: process.env.CLOUDINARY_API_SECRET,
 });
 
-export async function uploadToCloudinary(buffer, folder = 'internship-platform') {
+export async function uploadToCloudinary(buffer, folder = 'internship-platform', resourceType = 'raw') {
   return new Promise((resolve, reject) => {
     const uploadStream = cloudinary.uploader.upload_stream(
-      { folder },
+      { folder, resource_type: resourceType },
       (err, result) => {
         if (err) return reject(err);
         resolve(result?.secure_url);
