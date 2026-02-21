@@ -277,10 +277,16 @@ export async function chargeAuthorization({ email, amount, authorizationCode, re
 
 /**
  * Verify Paystack webhook signature (x-paystack-signature)
+ * Returns false if secret is not configured (reject webhooks until properly set).
  */
 export function verifyWebhookSignature(payload, signature) {
   const secret = process.env.PAYSTACK_SECRET_KEY;
-  if (!secret) return true; // skip if not set
+  if (!secret || !signature) return false;
   const hash = crypto.createHmac('sha512', secret).update(payload).digest('hex');
-  return hash === signature;
+  if (hash.length !== signature.length) return false;
+  try {
+    return crypto.timingSafeEqual(Buffer.from(hash, 'hex'), Buffer.from(signature, 'hex'));
+  } catch {
+    return false;
+  }
 }

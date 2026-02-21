@@ -1,4 +1,5 @@
 import express from 'express';
+import escapeStringRegexp from 'escape-string-regexp';
 import Opportunity from '../models/Opportunity.js';
 import User from '../models/User.js';
 import { protect, adminOnly } from '../middleware/auth.js';
@@ -6,16 +7,26 @@ import { body, validationResult } from 'express-validator';
 
 const router = express.Router();
 
+function safeRegex(str) {
+  if (!str || typeof str !== 'string') return null;
+  try {
+    return new RegExp(escapeStringRegexp(str.trim()), 'i');
+  } catch {
+    return null;
+  }
+}
+
 // Admin: list all opportunities (including inactive)
 router.get('/admin/all', protect, adminOnly, async (req, res) => {
   try {
-    const { page = 1, limit = 50 } = req.query;
-    const skip = (Number(page) - 1) * Number(limit);
+    const page = Math.max(1, Number(req.query.page) || 1);
+    const limit = Math.min(100, Math.max(1, Number(req.query.limit) || 50));
+    const skip = (page - 1) * limit;
     const [opportunities, total] = await Promise.all([
-      Opportunity.find({}).sort({ createdAt: -1 }).skip(skip).limit(Number(limit)).lean(),
+      Opportunity.find({}).sort({ createdAt: -1 }).skip(skip).limit(limit).lean(),
       Opportunity.countDocuments({}),
     ]);
-    res.json({ opportunities, total, page: Number(page), pages: Math.ceil(total / Number(limit)) });
+    res.json({ opportunities, total, page, pages: Math.ceil(total / limit) });
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
@@ -23,25 +34,31 @@ router.get('/admin/all', protect, adminOnly, async (req, res) => {
 
 router.get('/', async (req, res) => {
   try {
-    const { category, location, type, duration, search, page = 1, limit = 12 } = req.query;
+    const { category, location, type, duration, search } = req.query;
+    const page = Math.max(1, Number(req.query.page) || 1);
+    const limit = Math.min(50, Math.max(1, Number(req.query.limit) || 12));
     const filter = { isActive: true };
-    if (category) filter.category = new RegExp(category, 'i');
-    if (location) filter.location = new RegExp(location, 'i');
+    const catRe = safeRegex(category);
+    if (catRe) filter.category = catRe;
+    const locRe = safeRegex(location);
+    if (locRe) filter.location = locRe;
     if (type) filter.type = type;
-    if (duration) filter.duration = new RegExp(duration, 'i');
-    if (search) {
+    const durRe = safeRegex(duration);
+    if (durRe) filter.duration = durRe;
+    const searchRe = safeRegex(search);
+    if (searchRe) {
       filter.$or = [
-        { title: new RegExp(search, 'i') },
-        { company: new RegExp(search, 'i') },
-        { description: new RegExp(search, 'i') },
+        { title: searchRe },
+        { company: searchRe },
+        { description: searchRe },
       ];
     }
-    const skip = (Number(page) - 1) * Number(limit);
+    const skip = (page - 1) * limit;
     const [opportunities, total] = await Promise.all([
-      Opportunity.find(filter).sort({ createdAt: -1 }).skip(skip).limit(Number(limit)).lean(),
+      Opportunity.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit).lean(),
       Opportunity.countDocuments(filter),
     ]);
-    res.json({ opportunities, total, page: Number(page), pages: Math.ceil(total / Number(limit)) });
+    res.json({ opportunities, total, page, pages: Math.ceil(total / limit) });
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
@@ -151,11 +168,17 @@ router.post(
   }
 );
 
+const PATCH_WHITELIST = ['title', 'company', 'type', 'description', 'location', 'duration', 'applicationFee', 'isActive', 'deadline', 'category'];
 router.patch('/:id', protect, adminOnly, async (req, res) => {
   try {
+    const updates = {};
+    for (const k of PATCH_WHITELIST) {
+      if (req.body[k] !== undefined) updates[k] = req.body[k];
+    }
+    if (Object.keys(updates).length === 0) return res.status(400).json({ message: 'No valid fields to update' });
     const opportunity = await Opportunity.findByIdAndUpdate(
       req.params.id,
-      req.body,
+      updates,
       { new: true }
     );
     if (!opportunity) return res.status(404).json({ message: 'Opportunity not found' });

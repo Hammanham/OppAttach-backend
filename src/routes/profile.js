@@ -3,6 +3,7 @@ import multer from 'multer';
 import User from '../models/User.js';
 import { protect } from '../middleware/auth.js';
 import { uploadToCloudinary } from '../utils/cloudinary.js';
+import { validateDocFile } from '../utils/fileValidation.js';
 
 const router = express.Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
@@ -34,6 +35,8 @@ router.post('/cv', protect, upload.single('cv'), async (req, res) => {
   try {
     const file = req.file;
     if (!file) return res.status(400).json({ message: 'CV file is required' });
+    const fileCheck = validateDocFile(file);
+    if (!fileCheck.valid) return res.status(400).json({ message: fileCheck.message });
     const cvUrl = await uploadToCloudinary(file.buffer, 'internship-platform/cvs');
     const user = await User.findById(req.user._id);
     if (!user) return res.status(401).json({ message: 'User not found' });

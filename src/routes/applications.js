@@ -12,9 +12,10 @@ import {
   refundTransaction,
   createTransferRecipient,
   initiateTransfer,
-  fetchTransfer,
   chargeAuthorization,
+  verifyWebhookSignature,
 } from '../utils/paystack.js';
+import { validateDocFile } from '../utils/fileValidation.js';
 
 const router = express.Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
@@ -35,19 +36,20 @@ router.get('/', protect, async (req, res) => {
 // Admin: list all applications
 router.get('/admin/all', protect, adminOnly, async (req, res) => {
   try {
-    const { page = 1, limit = 50 } = req.query;
-    const skip = (Number(page) - 1) * Number(limit);
+    const page = Math.max(1, Number(req.query.page) || 1);
+    const limit = Math.min(100, Math.max(1, Number(req.query.limit) || 50));
+    const skip = (page - 1) * limit;
     const [applications, total] = await Promise.all([
       Application.find({})
         .populate('opportunityId', 'title company type')
         .populate('userId', 'name email')
         .sort({ createdAt: -1 })
         .skip(skip)
-        .limit(Number(limit))
+        .limit(limit)
         .lean(),
       Application.countDocuments({}),
     ]);
-    res.json({ applications, total, page: Number(page), pages: Math.ceil(total / Number(limit)) });
+    res.json({ applications, total, page, pages: Math.ceil(total / limit) });
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
@@ -57,21 +59,28 @@ router.get('/admin/all', protect, adminOnly, async (req, res) => {
 router.post('/admin/:id/refund', protect, adminOnly, async (req, res) => {
   try {
     const { reason } = req.body;
-    const application = await Application.findById(req.params.id)
+    const application = await Application.findOneAndUpdate(
+      {
+        _id: req.params.id,
+        refundedAt: null,
+      },
+      { $set: { refundedAt: new Date() } },
+      { new: true }
+    )
       .populate('opportunityId')
       .populate('userId', 'name email');
-    if (!application) return res.status(404).json({ message: 'Application not found' });
-    if (application.refundedAt) return res.status(400).json({ message: 'Already refunded' });
+    if (!application) return res.status(404).json({ message: 'Application not found or already refunded' });
     if (application.status !== 'submitted' && application.status !== 'under_review' && application.status !== 'shortlisted' && application.status !== 'rejected' && application.status !== 'accepted') {
       return res.status(400).json({ message: 'Cannot refund application that has not been paid' });
     }
     const txId = application.paymentTransactionId;
-    if (!txId) return res.status(400).json({ message: 'No payment transaction to refund' });
+    if (!txId) {
+      await Application.findByIdAndUpdate(application._id, { $unset: { refundedAt: 1 } });
+      return res.status(400).json({ message: 'No payment transaction to refund' });
+    }
     const amount = application.amountPaid ?? application.opportunityId?.applicationFee ?? 350;
     await refundTransaction(txId, { amount, currency: 'KES', reason: reason || `Refund for application ${application._id}` });
-    application.refundedAt = new Date();
-    application.refundAmount = amount;
-    await application.save();
+    await Application.findByIdAndUpdate(application._id, { $set: { refundAmount: amount } });
     res.json({ message: 'Refund initiated', refundAmount: amount });
   } catch (err) {
     res.status(400).json({ message: err.message || 'Refund failed' });
@@ -204,11 +213,17 @@ router.post(
 
       const resumeFile = req.files?.resume?.[0];
       if (!resumeFile) return res.status(400).json({ message: 'Resume is required' });
+      const resumeCheck = validateDocFile(resumeFile);
+      if (!resumeCheck.valid) return res.status(400).json({ message: resumeCheck.message });
 
       const isAttachment = opportunity.type === 'attachment';
       const recLetterFile = req.files?.recommendationLetter?.[0];
       if (isAttachment && !recLetterFile)
         return res.status(400).json({ message: 'Recommendation letter is required for attachments' });
+      if (recLetterFile) {
+        const recCheck = validateDocFile(recLetterFile);
+        if (!recCheck.valid) return res.status(400).json({ message: recCheck.message });
+      }
 
       const resumeUrl = await uploadToCloudinary(resumeFile.buffer, 'internship-platform/resumes');
       let recommendationLetterUrl = null;
@@ -252,8 +267,12 @@ router.post(
 
 // Paystack webhook handler (charge.success, transfer.success, transfer.failed)
 export async function paystackWebhookHandler(req, res) {
-  res.status(200).send();
   const rawBody = req.body?.toString?.() || (typeof req.body === 'string' ? req.body : '');
+  const signature = req.headers['x-paystack-signature'];
+  if (!verifyWebhookSignature(rawBody, signature)) {
+    return res.status(401).json({ message: 'Invalid webhook signature' });
+  }
+  res.status(200).send();
   let body;
   try {
     body = rawBody ? JSON.parse(rawBody) : {};
