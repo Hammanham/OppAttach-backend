@@ -14,8 +14,11 @@ const applicationSchema = new mongoose.Schema(
     },
     mpesaCheckoutRequestId: { type: String }, // legacy
     mpesaTransactionId: { type: String }, // legacy
-    paymentTransactionId: { type: String }, // Flutterwave transaction id
+    paymentTransactionId: { type: String },
     amountPaid: { type: Number },
+    refundedAt: { type: Date },
+    refundTransferCode: { type: String },
+    refundAmount: { type: Number },
   },
   { timestamps: true }
 );

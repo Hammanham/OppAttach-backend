@@ -10,13 +10,25 @@ const userSchema = new mongoose.Schema(
     googleId: { type: String, sparse: true },
     avatar: { type: String },
     cvUrl: { type: String },
+    paystackAuthorizationCode: { type: String },
+    paystackCardLast4: { type: String },
+    paystackCardType: { type: String },
     role: { type: String, enum: ['student', 'graduate', 'admin'], default: 'student' },
     emailVerified: { type: Boolean, default: false },
     emailVerificationToken: { type: String },
     emailVerificationExpires: { type: Date },
     savedOpportunities: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Opportunity' }],
   },
-  { timestamps: true }
+  {
+    timestamps: true,
+    toJSON: {
+      transform(doc, ret) {
+        delete ret.paystackAuthorizationCode;
+        ret.hasSavedCard = !!doc.paystackAuthorizationCode;
+        return ret;
+      },
+    },
+  }
 );
 
 userSchema.pre('save', async function (next) {

@@ -5,7 +5,16 @@ import Opportunity from '../models/Opportunity.js';
 import User from '../models/User.js';
 import { protect, adminOnly } from '../middleware/auth.js';
 import { uploadToCloudinary } from '../utils/cloudinary.js';
-import { initializeTransaction, chargeMpesa } from '../utils/paystack.js';
+import {
+  initializeTransaction,
+  chargeMpesa,
+  verifyTransaction,
+  refundTransaction,
+  createTransferRecipient,
+  initiateTransfer,
+  fetchTransfer,
+  chargeAuthorization,
+} from '../utils/paystack.js';
 
 const router = express.Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
@@ -41,6 +50,70 @@ router.get('/admin/all', protect, adminOnly, async (req, res) => {
     res.json({ applications, total, page: Number(page), pages: Math.ceil(total / Number(limit)) });
   } catch (err) {
     res.status(500).json({ message: err.message });
+  }
+});
+
+// Admin: refund application (refunds to original payment method)
+router.post('/admin/:id/refund', protect, adminOnly, async (req, res) => {
+  try {
+    const { reason } = req.body;
+    const application = await Application.findById(req.params.id)
+      .populate('opportunityId')
+      .populate('userId', 'name email');
+    if (!application) return res.status(404).json({ message: 'Application not found' });
+    if (application.refundedAt) return res.status(400).json({ message: 'Already refunded' });
+    if (application.status !== 'submitted' && application.status !== 'under_review' && application.status !== 'shortlisted' && application.status !== 'rejected' && application.status !== 'accepted') {
+      return res.status(400).json({ message: 'Cannot refund application that has not been paid' });
+    }
+    const txId = application.paymentTransactionId;
+    if (!txId) return res.status(400).json({ message: 'No payment transaction to refund' });
+    const amount = application.amountPaid ?? application.opportunityId?.applicationFee ?? 350;
+    await refundTransaction(txId, { amount, currency: 'KES', reason: reason || `Refund for application ${application._id}` });
+    application.refundedAt = new Date();
+    application.refundAmount = amount;
+    await application.save();
+    res.json({ message: 'Refund initiated', refundAmount: amount });
+  } catch (err) {
+    res.status(400).json({ message: err.message || 'Refund failed' });
+  }
+});
+
+// Admin: transfer to M-Pesa (e.g. refund to specific number)
+router.post('/admin/transfer-mpesa', protect, adminOnly, async (req, res) => {
+  try {
+    const { amount, phone, name, reason, applicationId } = req.body;
+    if (!amount || !phone) {
+      return res.status(400).json({ message: 'Amount and phone number are required' });
+    }
+    const recipient = await createTransferRecipient({
+      name: name || 'Recipient',
+      phone,
+      currency: 'KES',
+    });
+    const ref = applicationId ? `REF-${applicationId}-${Date.now()}` : `TRF-${Date.now()}`;
+    const transfer = await initiateTransfer({
+      amount: Number(amount),
+      recipientCode: recipient.recipient_code,
+      reference: ref,
+      reason: reason || 'Refund',
+      currency: 'KES',
+    });
+    if (applicationId) {
+      const app = await Application.findById(applicationId);
+      if (app) {
+        app.refundedAt = new Date();
+        app.refundAmount = Number(amount);
+        app.refundTransferCode = transfer.transfer_code || transfer.id;
+        await app.save();
+      }
+    }
+    res.json({
+      message: 'Transfer initiated',
+      transferCode: transfer.transfer_code || transfer.id,
+      status: transfer.status,
+    });
+  } catch (err) {
+    res.status(400).json({ message: err.message || 'Transfer failed' });
   }
 });
 
@@ -177,7 +250,7 @@ router.post(
   }
 );
 
-// Paystack webhook handler (mounted in index.js with raw body parser)
+// Paystack webhook handler (charge.success, transfer.success, transfer.failed)
 export async function paystackWebhookHandler(req, res) {
   res.status(200).send();
   const rawBody = req.body?.toString?.() || (typeof req.body === 'string' ? req.body : '');
@@ -189,20 +262,86 @@ export async function paystackWebhookHandler(req, res) {
   }
   const event = body?.event;
   const data = body?.data;
-  if (event !== 'charge.success' || !data) return;
-  const reference = data?.reference;
-  const id = data?.id;
-  const amount = data?.amount;
-  if (!reference || !reference.startsWith('APP-')) return;
-  // Reference format: APP-{applicationId} or APP-{applicationId}-{timestamp}
-  const applicationId = reference.replace(/^APP-/, '').replace(/-\d+$/, '');
-  const application = await Application.findById(applicationId);
-  if (!application || application.status !== 'pending_payment') return;
-  application.status = 'submitted';
-  application.paymentTransactionId = String(id ?? reference);
-  if (amount != null) application.amountPaid = Number(amount) / 100;
-  await application.save();
+  if (!data) return;
+
+  if (event === 'charge.success') {
+    const reference = data?.reference;
+    const id = data?.id;
+    const amount = data?.amount;
+    const auth = data?.authorization;
+    if (reference && reference.startsWith('APP-')) {
+      const applicationId = reference.replace(/^APP-/, '').replace(/-\d+$/, '');
+      const application = await Application.findById(applicationId);
+      if (application && application.status === 'pending_payment') {
+        application.status = 'submitted';
+        application.paymentTransactionId = String(id ?? reference);
+        if (amount != null) application.amountPaid = Number(amount) / 100;
+        await application.save();
+        if (application.userId && auth?.authorization_code && auth?.reusable) {
+          await User.findByIdAndUpdate(application.userId, {
+            paystackAuthorizationCode: auth.authorization_code,
+            paystackCardLast4: auth?.last4 || null,
+            paystackCardType: auth?.card_type || null,
+          });
+        }
+      }
+    }
+    return;
+  }
+
+  if (event === 'transfer.success' || event === 'transfer.failed') {
+    const transferCode = data?.transfer_code || data?.id;
+    const status = data?.status;
+    if (transferCode && status === 'success') {
+      const app = await Application.findOne({ refundTransferCode: String(transferCode) });
+      if (app) {
+        app.refundedAt = new Date();
+        await app.save();
+      }
+    }
+  }
 }
+
+// Verify payment (call when user returns from Paystack with reference)
+router.post('/verify-payment', protect, async (req, res) => {
+  try {
+    const { reference } = req.body;
+    if (!reference || typeof reference !== 'string') {
+      return res.status(400).json({ message: 'Reference is required' });
+    }
+    if (!reference.startsWith('APP-')) {
+      return res.status(400).json({ message: 'Invalid reference' });
+    }
+    const result = await verifyTransaction(reference);
+    if (!result.verified) {
+      return res.json({ verified: false, message: 'Payment not completed' });
+    }
+    const applicationId = reference.replace(/^APP-/, '').replace(/-\d+$/, '');
+    const application = await Application.findOne({
+      _id: applicationId,
+      userId: req.user._id,
+      status: 'pending_payment',
+    });
+    if (application) {
+      const tx = result.data || {};
+      application.status = 'submitted';
+      application.paymentTransactionId = String(tx.id ?? tx.reference ?? reference);
+      if (tx.amount != null) application.amountPaid = Number(tx.amount) / 100;
+      await application.save();
+      const auth = result.authorization || tx.authorization;
+      if (auth?.authorization_code && auth?.reusable) {
+        await User.findByIdAndUpdate(req.user._id, {
+          paystackAuthorizationCode: auth.authorization_code,
+          paystackCardLast4: auth?.last4 || null,
+          paystackCardType: auth?.card_type || null,
+        });
+      }
+    }
+    res.json({ verified: true });
+  } catch (err) {
+    res.status(400).json({ verified: false, message: err.message || 'Verification failed' });
+  }
+});
 
 // Pay for existing pending_payment application (get new Paystack payment link)
 router.post('/:id/pay', protect, async (req, res) => {
@@ -220,6 +359,46 @@ router.post('/:id/pay', protect, async (req, res) => {
     });
   } catch (err) {
     res.status(500).json({ message: err.message });
+  }
+});
+
+// Charge with saved card (returning customer)
+router.post('/:id/charge-saved-card', protect, async (req, res) => {
+  try {
+    const user = await User.findById(req.user._id).select('paystackAuthorizationCode email name').lean();
+    if (!user?.paystackAuthorizationCode) {
+      return res.status(400).json({ message: 'No saved card. Please use Pay now or M-Pesa.' });
+    }
+    const application = await Application.findOne({
+      _id: req.params.id,
+      userId: req.user._id,
+      status: 'pending_payment',
+    }).populate('opportunityId');
+    if (!application) return res.status(404).json({ message: 'Application not found' });
+    const opp = application.opportunityId;
+    const amount = opp?.applicationFee ?? 350;
+    const reference = `APP-${application._id}-${Date.now()}`;
+    const result = await chargeAuthorization({
+      email: user.email,
+      amount,
+      authorizationCode: user.paystackAuthorizationCode,
+      reference,
+      currency: 'KES',
+      metadata: { customer_name: user.name || 'Applicant' },
+    });
+    if (result.status === 'success') {
+      application.status = 'submitted';
+      application.paymentTransactionId = result.reference;
+      application.amountPaid = amount;
+      await application.save();
+    }
+    res.json({
+      reference: result.reference,
+      status: result.status,
+      message: result.status === 'success' ? 'Payment successful.' : 'Charge initiated. Payment may take a moment to confirm.',
+    });
+  } catch (err) {
+    res.status(400).json({ message: err.message || 'Charge failed' });
   }
 });
 

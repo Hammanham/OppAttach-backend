@@ -49,7 +49,10 @@ If not set, it defaults to `FRONTEND_URL/app/applications`.
 
 4. Save the webhook URL
 
-Paystack will send `charge.success` events to this URL when a payment completes. Your app uses this to update the application status from `pending_payment` to `submitted`.
+Paystack will send these events to this URL:
+
+- **charge.success** — Payment completed. App updates application status and stores card authorization (for "Pay with saved card") if reusable.
+- **transfer.success** / **transfer.failed** — Transfer status (for admin M-Pesa transfers/refunds).
 
 ---
 
@@ -82,6 +85,19 @@ Use **Test** keys first:
    - CVV: any 3 digits  
    - Expiry: any future date  
 3. After testing, switch to Live keys for production
+
+---
+
+## Implemented features
+
+| Feature | Description |
+|---------|-------------|
+| **Initialize** | Redirect users to Paystack hosted page (Card/M-Pesa) |
+| **Verify** | When user returns from payment, backend verifies via API (fallback if webhook delayed) |
+| **M-Pesa Charge** | STK push for M-Pesa payments |
+| **Charge returning customer** | "Pay with saved card" — reuses stored authorization from first card payment |
+| **Refund** | Admin-only: refund to original payment method via Paystack Refund API |
+| **Transfers** | Admin-only: send to M-Pesa via Create Recipient + Initiate Transfer |
 
 ---
 
