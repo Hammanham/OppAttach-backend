@@ -38,6 +38,13 @@ export async function initializeTransaction({ reference, amount, currency, callb
   const data = await res.json();
   if (!data.status || !data.data?.authorization_url) {
     const msg = data.message || 'Paystack payment init failed';
+    console.error('[Paystack] Initialize failed:', {
+      message: msg,
+      status: data.status,
+      httpStatus: res.status,
+      meta: data.meta,
+      errors: data.errors,
+    });
     throw new Error(msg);
   }
   return { paymentLink: data.data.authorization_url, reference: data.data.reference };

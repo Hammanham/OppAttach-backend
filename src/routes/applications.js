@@ -179,11 +179,12 @@ async function getPaymentLink(application, opportunity, user) {
   const baseUrl = process.env.PAYSTACK_CALLBACK_URL || `${(process.env.FRONTEND_URL || '').replace(/\/$/, '')}/app/applications`;
   const callbackUrl = `${baseUrl}?payment=done&reference=APP-${application._id}`;
   const cancelUrl = `${baseUrl.split('?')[0]}?cancelled=1`;
-  // Reference must be unique per attempt (Paystack rejects duplicates on retry)
   const reference = `APP-${application._id}-${Date.now()}`;
+  const amount = opportunity?.applicationFee ?? 350;
+  console.log('[Paystack] Initializing:', { reference, amount, callbackUrl: callbackUrl.slice(0, 60) + '...', email: user.email?.slice(0, 3) + '***' });
   const { paymentLink } = await initializeTransaction({
     reference,
-    amount: opportunity?.applicationFee ?? 350,
+    amount,
     currency: 'KES',
     callbackUrl,
     cancelUrl,
@@ -260,6 +261,7 @@ router.post(
         message: 'Application saved. Complete payment via the link to finish.',
       });
     } catch (err) {
+      console.error('[Paystack] Create application error:', err.message);
       res.status(500).json({ message: err.message });
     }
   }
@@ -377,6 +379,7 @@ router.post('/:id/pay', protect, async (req, res) => {
       message: 'Complete payment via the link to finish your application.',
     });
   } catch (err) {
+    console.error('[Paystack] Pay route error:', err.message);
     res.status(500).json({ message: err.message });
   }
 });
