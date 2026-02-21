@@ -5,20 +5,23 @@ import nodemailer from 'nodemailer';
  * - SMTP_HOST (e.g. smtp.gmail.com)
  * - SMTP_PORT (e.g. 587)
  * - SMTP_USER (e.g. your-email@gmail.com)
- * - SMTP_PASS (e.g. Gmail App Password)
- * If not set, returns null and sendVerificationEmail will no-op.
+ * - SMTP_PASS (e.g. Gmail App Password — spaces are trimmed)
+ * If not set, returns null and send functions will no-op.
  */
 function createTransporter() {
   const host = process.env.SMTP_HOST;
   const port = process.env.SMTP_PORT || 587;
   const user = process.env.SMTP_USER;
-  const pass = process.env.SMTP_PASS;
+  const pass = process.env.SMTP_PASS ? String(process.env.SMTP_PASS).replace(/\s/g, '') : '';
   if (!host || !user || !pass) return null;
+  const portNum = Number(port);
   return nodemailer.createTransport({
     host,
-    port: Number(port),
-    secure: port === '465',
+    port: portNum,
+    secure: portNum === 465,
     auth: { user, pass },
+    // Gmail port 587 uses STARTTLS; ensure TLS is required
+    ...(portNum === 587 && { requireTLS: true }),
   });
 }
 
@@ -52,6 +55,41 @@ export async function sendVerificationEmail(to, name, verificationUrl) {
     return true;
   } catch (err) {
     console.error('Send verification email error:', err.message);
+    return false;
+  }
+}
+
+/**
+ * Send password reset email.
+ * @param {string} to - Email address
+ * @param {string} name - User name
+ * @param {string} resetUrl - Full URL to click (e.g. https://app.example.com/reset-password?token=xxx)
+ * @returns {Promise<boolean>} - true if sent, false otherwise
+ */
+export async function sendPasswordResetEmail(to, name, resetUrl) {
+  const transporter = createTransporter();
+  if (!transporter) {
+    console.warn('Password reset email skipped: SMTP not configured');
+    return false;
+  }
+  try {
+    await transporter.sendMail({
+      from: process.env.SMTP_FROM || process.env.SMTP_USER,
+      to,
+      subject: 'Reset your password — IAS Platform',
+      text: `Hi ${name},\n\nYou requested a password reset. Click this link to set a new password:\n${resetUrl}\n\nThe link expires in 1 hour.\n\nIf you didn't request this, you can ignore this email.\n\n— IAS Platform`,
+      html: `
+        <p>Hi ${name},</p>
+        <p>You requested a password reset. Click the link below to set a new password:</p>
+        <p><a href="${resetUrl}">Reset my password</a></p>
+        <p>The link expires in 1 hour.</p>
+        <p>If you didn't request this, you can safely ignore this email.</p>
+        <p>— IAS Platform</p>
+      `,
+    });
+    return true;
+  } catch (err) {
+    console.error('Send password reset email error:', err.message);
     return false;
   }
 }

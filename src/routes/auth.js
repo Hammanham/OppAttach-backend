@@ -5,7 +5,7 @@ import { body, validationResult } from 'express-validator';
 import { OAuth2Client } from 'google-auth-library';
 import User from '../models/User.js';
 import { protect } from '../middleware/auth.js';
-import { sendVerificationEmail } from '../utils/sendEmail.js';
+import { sendVerificationEmail, sendPasswordResetEmail } from '../utils/sendEmail.js';
 
 const router = express.Router();
 const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
@@ -136,6 +136,109 @@ router.post('/google', async (req, res) => {
     res.status(401).json({ message });
   }
 });
+
+// POST /forgot-password — send reset link to email
+router.post(
+  '/forgot-password',
+  [body('email').isEmail().normalizeEmail()],
+  async (req, res) => {
+    try {
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
+      const { email } = req.body;
+      const user = await User.findOne({ email, authProvider: 'email' });
+      // Always return success to prevent email enumeration
+      if (!user || !user.password) {
+        return res.json({ message: 'If an account exists with that email, a reset link has been sent.' });
+      }
+      const resetToken = crypto.randomBytes(32).toString('hex');
+      user.passwordResetToken = resetToken;
+      user.passwordResetExpires = new Date(Date.now() + 60 * 60 * 1000); // 1 hour
+      await user.save();
+      const frontendUrl = (process.env.FRONTEND_URL || 'http://localhost:3000').replace(/\/$/, '');
+      const resetUrl = `${frontendUrl}/reset-password?token=${resetToken}`;
+      const sent = await sendPasswordResetEmail(user.email, user.name, resetUrl);
+      res.json({
+        message: sent
+          ? 'If an account exists with that email, a reset link has been sent.'
+          : 'Password reset requested. If email delivery fails, try again later or contact support.',
+      });
+    } catch (err) {
+      res.status(500).json({ message: err.message });
+    }
+  }
+);
+
+// POST /reset-password — set new password using token from email link
+router.post(
+  '/reset-password',
+  [
+    body('token').notEmpty().withMessage('Token is required'),
+    body('password').isLength({ min: 6 }).withMessage('Password must be at least 6 characters'),
+  ],
+  async (req, res) => {
+    try {
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
+      const { token, password } = req.body;
+      const user = await User.findOne({
+        passwordResetToken: token,
+        passwordResetExpires: { $gt: new Date() },
+      });
+      if (!user) {
+        return res.status(400).json({ message: 'Invalid or expired reset token. Please request a new link.' });
+      }
+      user.password = password;
+      user.passwordResetToken = undefined;
+      user.passwordResetExpires = undefined;
+      await user.save();
+      res.json({ message: 'Password updated. You can now log in.' });
+    } catch (err) {
+      res.status(500).json({ message: err.message });
+    }
+  }
+);
+
+// POST /resend-verification — resend verification email (body: { email } or requires auth)
+router.post(
+  '/resend-verification',
+  [body('email').optional().isEmail().normalizeEmail()],
+  async (req, res) => {
+    try {
+      let user;
+      if (req.body.email) {
+        user = await User.findOne({ email: req.body.email, authProvider: 'email' });
+      } else {
+        const token = req.headers.authorization?.replace('Bearer ', '');
+        if (token) {
+          try {
+            const decoded = jwt.verify(token, process.env.JWT_SECRET, { algorithms: ['HS256'] });
+            user = await User.findById(decoded.id);
+          } catch {
+            user = null;
+          }
+        }
+      }
+      if (!user || user.emailVerified) {
+        return res.json({ message: 'If the account exists and is unverified, a verification email has been sent.' });
+      }
+      const verificationToken = crypto.randomBytes(32).toString('hex');
+      user.emailVerificationToken = verificationToken;
+      user.emailVerificationExpires = new Date(Date.now() + 24 * 60 * 60 * 1000);
+      await user.save();
+      const baseUrl = process.env.BACKEND_URL || `${req.protocol}://${req.get('host')}`;
+      const verificationUrl = `${baseUrl.replace(/\/$/, '')}/api/auth/verify-email?token=${verificationToken}`;
+      const sent = await sendVerificationEmail(user.email, user.name, verificationUrl);
+      res.json({
+        message: sent
+          ? 'Verification email sent. Please check your inbox.'
+          : 'Could not send verification email. Please try again later.',
+      });
+    } catch (err) {
+      res.status(500).json({ message: err.message });
+    }
+  }
+);
 
 // GET /verify-email?token=xxx — verify email from link in email, then redirect to frontend
 router.get('/verify-email', async (req, res) => {
