@@ -102,7 +102,7 @@ export async function sendOTPEmail(to, otp) {
 export async function sendPasswordResetEmail(to, name, resetUrl) {
   const transporter = createTransporter();
   if (!transporter) {
-    console.warn('Password reset email skipped: SMTP not configured');
+    console.error('[SMTP] Password reset email skipped: SMTP not configured. Check SMTP_HOST, SMTP_USER, SMTP_PASS in .env');
     return false;
   }
   try {
@@ -122,7 +122,9 @@ export async function sendPasswordResetEmail(to, name, resetUrl) {
     });
     return true;
   } catch (err) {
-    console.error('Send password reset email error:', err.message);
+    console.error('[SMTP] Password reset email failed:', err.message);
+    if (err.response) console.error('[SMTP] Response:', err.response);
+    if (err.code) console.error('[SMTP] Code:', err.code);
     return false;
   }
 }
