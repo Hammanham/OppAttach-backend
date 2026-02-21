@@ -60,6 +60,39 @@ export async function sendVerificationEmail(to, name, verificationUrl) {
 }
 
 /**
+ * Send OTP verification email.
+ * @param {string} to - Email address
+ * @param {string} otp - 6-digit OTP (plain text, sent in email)
+ * @returns {Promise<boolean>} - true if sent, false otherwise
+ */
+export async function sendOTPEmail(to, otp) {
+  const transporter = createTransporter();
+  if (!transporter) {
+    console.warn('OTP email skipped: SMTP not configured');
+    return false;
+  }
+  try {
+    await transporter.sendMail({
+      from: process.env.SMTP_FROM || process.env.SMTP_USER,
+      to,
+      subject: 'Verify your email — IAS Platform',
+      text: `Your verification code is: ${otp}\n\nThis code expires in 10 minutes.\n\n— IAS Platform`,
+      html: `
+        <h2>Email Verification</h2>
+        <p>Your verification code is:</p>
+        <h1 style="font-size: 32px; letter-spacing: 4px; margin: 16px 0;">${otp}</h1>
+        <p>This code expires in 10 minutes.</p>
+        <p>— IAS Platform</p>
+      `,
+    });
+    return true;
+  } catch (err) {
+    console.error('Send OTP email error:', err.message);
+    return false;
+  }
+}
+
+/**
  * Send password reset email.
  * @param {string} to - Email address
  * @param {string} name - User name

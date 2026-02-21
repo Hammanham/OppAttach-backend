@@ -5,7 +5,8 @@ import { body, validationResult } from 'express-validator';
 import { OAuth2Client } from 'google-auth-library';
 import User from '../models/User.js';
 import { protect } from '../middleware/auth.js';
-import { sendVerificationEmail, sendPasswordResetEmail } from '../utils/sendEmail.js';
+import { sendOTPEmail, sendPasswordResetEmail } from '../utils/sendEmail.js';
+import { generateOTP, hashOTP } from '../utils/otp.js';
 
 const router = express.Router();
 const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
@@ -34,20 +35,22 @@ router.post(
       if (existing) return res.status(400).json({ message: 'Email already registered' });
       const isAdmin = process.env.ADMIN_EMAIL && email.toLowerCase() === process.env.ADMIN_EMAIL.toLowerCase();
       const role = isAdmin ? 'admin' : (bodyRole === 'graduate' ? 'graduate' : 'student');
-      const user = await User.create({ name, email, password, authProvider: 'email', role });
-      const verificationToken = crypto.randomBytes(32).toString('hex');
-      user.emailVerificationToken = verificationToken;
-      user.emailVerificationExpires = new Date(Date.now() + 24 * 60 * 60 * 1000);
-      await user.save();
-      const baseUrl = process.env.BACKEND_URL || `${req.protocol}://${req.get('host')}`;
-      const verificationUrl = `${baseUrl.replace(/\/$/, '')}/api/auth/verify-email?token=${verificationToken}`;
-      const emailSent = await sendVerificationEmail(user.email, user.name, verificationUrl);
+      const otp = generateOTP();
+      const user = await User.create({
+        name,
+        email,
+        password,
+        authProvider: 'email',
+        role,
+        emailOTP: hashOTP(otp),
+        emailOTPExpires: new Date(Date.now() + 10 * 60 * 1000), // 10 min
+      });
+      const emailSent = await sendOTPEmail(user.email, otp);
       const u = { _id: user._id, name: user.name, email: user.email, role: user.role, avatar: user.avatar, emailVerified: user.emailVerified };
       res.status(201).json({
         user: u,
-        token: generateToken(user._id),
         verificationEmailSent: emailSent,
-        message: emailSent ? 'Account created. Please check your email to verify your address.' : 'Account created. Verification email could not be sent (SMTP not configured).',
+        message: emailSent ? 'OTP sent to your email. Please verify.' : 'Account created. OTP email could not be sent (SMTP not configured). Please contact support.',
       });
     } catch (err) {
       res.status(500).json({ message: err.message });
@@ -67,6 +70,9 @@ router.post(
       if (!user || !user.password) return res.status(401).json({ message: 'Invalid credentials' });
       const match = await user.matchPassword(password);
       if (!match) return res.status(401).json({ message: 'Invalid credentials' });
+      if (!user.emailVerified) {
+        return res.status(403).json({ message: 'Please verify your email first' });
+      }
       const u = { _id: user._id, name: user.name, email: user.email, role: user.role, avatar: user.avatar, emailVerified: user.emailVerified };
       res.json({ user: u, token: generateToken(user._id) });
     } catch (err) {
@@ -199,7 +205,45 @@ router.post(
   }
 );
 
-// POST /resend-verification — resend verification email (body: { email } or requires auth)
+// POST /verify-email — verify OTP (body: { email, otp })
+router.post(
+  '/verify-email',
+  [
+    body('email').isEmail().normalizeEmail(),
+    body('otp').isLength({ min: 6, max: 6 }).withMessage('OTP must be 6 digits'),
+  ],
+  async (req, res) => {
+    try {
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
+      const { email, otp } = req.body;
+      const hashedOTP = hashOTP(otp);
+      const user = await User.findOne({
+        email,
+        authProvider: 'email',
+        emailOTP: hashedOTP,
+        emailOTPExpires: { $gt: new Date() },
+      });
+      if (!user) {
+        return res.status(400).json({ message: 'Invalid or expired OTP' });
+      }
+      user.emailVerified = true;
+      user.emailOTP = undefined;
+      user.emailOTPExpires = undefined;
+      await user.save();
+      const u = { _id: user._id, name: user.name, email: user.email, role: user.role, avatar: user.avatar, emailVerified: true };
+      res.json({
+        message: 'Email verified successfully',
+        user: u,
+        token: generateToken(user._id),
+      });
+    } catch (err) {
+      res.status(500).json({ message: err.message });
+    }
+  }
+);
+
+// POST /resend-verification — resend OTP (body: { email } or auth header)
 router.post(
   '/resend-verification',
   [body('email').optional().isEmail().normalizeEmail()],
@@ -220,53 +264,28 @@ router.post(
         }
       }
       if (!user || user.emailVerified) {
-        return res.json({ message: 'If the account exists and is unverified, a verification email has been sent.' });
+        return res.json({ message: 'If the account exists and is unverified, a verification OTP has been sent.' });
       }
-      const verificationToken = crypto.randomBytes(32).toString('hex');
-      user.emailVerificationToken = verificationToken;
-      user.emailVerificationExpires = new Date(Date.now() + 24 * 60 * 60 * 1000);
+      // Rate limit: 60s cooldown between resends
+      const otpSentAt = user.emailOTPExpires ? user.emailOTPExpires.getTime() - 10 * 60 * 1000 : 0;
+      if (otpSentAt > Date.now() - 60000) {
+        return res.status(429).json({ message: 'Please wait a moment before requesting another code.' });
+      }
+      const otp = generateOTP();
+      user.emailOTP = hashOTP(otp);
+      user.emailOTPExpires = new Date(Date.now() + 10 * 60 * 1000); // 10 min
       await user.save();
-      const baseUrl = process.env.BACKEND_URL || `${req.protocol}://${req.get('host')}`;
-      const verificationUrl = `${baseUrl.replace(/\/$/, '')}/api/auth/verify-email?token=${verificationToken}`;
-      const sent = await sendVerificationEmail(user.email, user.name, verificationUrl);
+      const sent = await sendOTPEmail(user.email, otp);
       res.json({
         message: sent
-          ? 'Verification email sent. Please check your inbox.'
-          : 'Could not send verification email. Please try again later.',
+          ? 'Verification OTP sent. Please check your inbox.'
+          : 'Could not send OTP. Please try again later.',
       });
     } catch (err) {
       res.status(500).json({ message: err.message });
     }
   }
 );
-
-// GET /verify-email?token=xxx — verify email from link in email, then redirect to frontend
-router.get('/verify-email', async (req, res) => {
-  try {
-    const { token } = req.query;
-    if (!token) {
-      const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
-      return res.redirect(`${frontendUrl}?verified=error&reason=missing`);
-    }
-    const user = await User.findOne({
-      emailVerificationToken: token,
-      emailVerificationExpires: { $gt: new Date() },
-    });
-    if (!user) {
-      const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
-      return res.redirect(`${frontendUrl}?verified=error&reason=invalid_or_expired`);
-    }
-    user.emailVerified = true;
-    user.emailVerificationToken = undefined;
-    user.emailVerificationExpires = undefined;
-    await user.save();
-    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
-    res.redirect(`${frontendUrl.replace(/\/$/, '')}?verified=1`);
-  } catch (err) {
-    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
-    res.redirect(`${frontendUrl}?verified=error`);
-  }
-});
 
 router.get('/me', protect, async (req, res) => {
   res.json(req.user);
