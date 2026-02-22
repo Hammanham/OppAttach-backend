@@ -163,11 +163,13 @@ router.post(
       await user.save();
       const frontendUrl = (process.env.FRONTEND_URL || 'http://localhost:3000').replace(/\/$/, '');
       const resetUrl = `${frontendUrl}/reset-password?token=${resetToken}`;
-      const sent = await sendPasswordResetEmail(user.email, user.name, resetUrl);
+      const result = await sendPasswordResetEmail(user.email, user.name, resetUrl);
+      const isDev = process.env.NODE_ENV !== 'production';
       res.json({
-        message: sent
+        message: result.ok
           ? 'If an account exists with that email, a reset link has been sent.'
           : 'Password reset requested. If email delivery fails, try again later or contact support.',
+        ...(isDev && !result.ok && result.error && { smtpError: result.error }),
       });
     } catch (err) {
       res.status(500).json({ message: err.message });

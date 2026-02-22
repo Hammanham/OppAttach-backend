@@ -97,13 +97,14 @@ export async function sendOTPEmail(to, otp) {
  * @param {string} to - Email address
  * @param {string} name - User name
  * @param {string} resetUrl - Full URL to click (e.g. https://app.example.com/reset-password?token=xxx)
- * @returns {Promise<boolean>} - true if sent, false otherwise
+ * @returns {Promise<{ ok: boolean, error?: string }>}
  */
 export async function sendPasswordResetEmail(to, name, resetUrl) {
   const transporter = createTransporter();
   if (!transporter) {
-    console.error('[SMTP] Password reset email skipped: SMTP not configured. Check SMTP_HOST, SMTP_USER, SMTP_PASS in .env');
-    return false;
+    const msg = 'SMTP not configured. Check SMTP_HOST, SMTP_USER, SMTP_PASS in .env';
+    console.error('[SMTP]', msg);
+    return { ok: false, error: msg };
   }
   try {
     await transporter.sendMail({
@@ -120,11 +121,12 @@ export async function sendPasswordResetEmail(to, name, resetUrl) {
         <p>— IAS Platform</p>
       `,
     });
-    return true;
+    return { ok: true };
   } catch (err) {
-    console.error('[SMTP] Password reset email failed:', err.message);
+    const msg = err.message || String(err);
+    console.error('[SMTP] Password reset email failed:', msg);
     if (err.response) console.error('[SMTP] Response:', err.response);
     if (err.code) console.error('[SMTP] Code:', err.code);
-    return false;
+    return { ok: false, error: msg };
   }
 }
