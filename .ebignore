@@ -1,8 +1,0 @@
-# Elastic Beanstalk - exclude from deployment zip
-.env
-.env.*
-!.env.example
-node_modules
-.git
-*.log
-.DS_Store
